@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>报告复现 · 有序等级分析</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>有序等级分析</h1>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="project.html">项目概率</a>
+    <a href="thresholds.html">阈值与漂移</a>
+    <a href="data.html">数据与版本</a>
+    <a href="reports.html">报告复现</a>
+  </nav>
+</header>
+<main><div id="root"></div></main>
+<script src="app.js"></script>
+<script>
+setActiveNav();
+const root = document.getElementById("root");
+
+(async function init() {
+  let data;
+  try { data = await getJSON("/api/reports"); }
+  catch (e) {
+    root.appendChild(el("div", { class: "error-box" }, "加载失败: " + e.message));
+    return;
+  }
+  const card = el("div", { class: "card" });
+  card.appendChild(el("h2", {}, "不可变报告与复现状态"));
+  card.appendChild(el("p", { class: "small secondary" },
+    "报告内嵌数据版本哈希与完整快照。出现追加更正后旧报告标记为失效, " +
+    "但仍可按哈希重放事件、重新拟合并核对参数一致。"));
+  if (!data.reports.length) {
+    card.appendChild(el("p", { class: "muted" }, "暂无报告, 请用 CLI report 生成。"));
+    root.appendChild(card); return;
+  }
+  const tbl = el("table");
+  tbl.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "报告 ID"), el("th", {}, "数据版本"),
+    el("th", {}, "当前有效性"), el("th", { class: "num" }, "诊断问题"),
+    el("th", {}, "模型选择"), el("th", {}, "操作")])));
+  const tb = el("tbody");
+  data.reports.forEach(r => {
+    const tr = el("tr");
+    tr.appendChild(el("td", { class: "small" }, r.report_id));
+    tr.appendChild(el("td", { class: "small muted" }, (r.version_id || "").slice(0, 12)));
+    tr.appendChild(el("td", {}, r.valid_now ? badge("good", "当前有效")
+                                           : badge("warn", "已被新事件取代")));
+    tr.appendChild(el("td", { class: "num" }, String(r.n_problems)));
+    tr.appendChild(el("td", {}, r.selection ? r.selection.selected : "—"));
+    const btn = el("button", {}, "复现核对");
+    const out = el("span", { class: "small secondary", style: "margin-left:8px" });
+    btn.addEventListener("click", async () => {
+      out.textContent = "核对中…";
+      try {
+        const res = await getJSON("/api/reproduce?id=" +
+          encodeURIComponent(r.report_id));
+        out.innerHTML = "";
+        out.appendChild(badge(res.reproduced ? "good" : "bad",
+          res.reproduced ? "可复现" : "不一致"));
+        out.appendChild(document.createTextNode(
+          ` 最大参数差 ${fmt(res.max_parameter_difference, 6)} · ` +
+          `当前${res.valid_now ? "有效" : "失效"}`));
+      } catch (e) { out.textContent = "失败: " + e.message; }
+    });
+    const cell = el("td"); cell.appendChild(btn); cell.appendChild(out);
+    tr.appendChild(cell);
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  card.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(card);
+})();
+</script>
+</body>
+</html>

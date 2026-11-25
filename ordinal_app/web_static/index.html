@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>总览 · 有序等级分析</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>有序等级分析</h1>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="project.html">项目概率</a>
+    <a href="thresholds.html">阈值与漂移</a>
+    <a href="data.html">数据与版本</a>
+    <a href="reports.html">报告复现</a>
+  </nav>
+  <span class="spacer"></span>
+  <span id="version-tag" class="badge neutral"></span>
+</header>
+<main>
+  <div id="root"></div>
+</main>
+<script src="app.js"></script>
+<script>
+setActiveNav();
+const root = document.getElementById("root");
+
+function abilityChart(abilities) {
+  // 水平点图: 能力估计 ± SE, 零线为锚
+  const W = 640, rowH = 34, m = { l: 70, r: 30, t: 12, b: 28 };
+  const H = m.t + m.b + abilities.length * rowH;
+  const vals = abilities.map(a => a.ability);
+  const ses = abilities.map(a => a.se || 0);
+  const lo = Math.min(...vals.map((v, i) => v - 2 * ses[i]), 0);
+  const hi = Math.max(...vals.map((v, i) => v + 2 * ses[i]), 0);
+  const span = (hi - lo) * 1.1 || 1;
+  const x = v => m.l + (v - (lo + hi) / 2 + span / 2) / span * (W - m.l - m.r);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%",
+    role: "img", "aria-label": "项目能力估计点图" });
+  // 网格 + 零线
+  for (let g = 0; g <= 4; g++) {
+    const gx = m.l + g * (W - m.l - m.r) / 4;
+    svg.appendChild(el("line", { x1: gx, x2: gx, y1: m.t, y2: H - m.b,
+      stroke: "var(--border)", "stroke-width": 1 }));
+  }
+  const zeroX = x(0);
+  svg.appendChild(el("line", { x1: zeroX, x2: zeroX, y1: m.t,
+    y2: H - m.b, stroke: "var(--text-muted)", "stroke-width": 1.5,
+    "stroke-dasharray": "4 3" }));
+  abilities.forEach((a, i) => {
+    const y = m.t + i * rowH + rowH / 2;
+    const cx = x(a.ability);
+    // SE 误差线 (±1 SE)
+    svg.appendChild(el("line", { x1: x(a.ability - a.se), x2: x(a.ability + a.se),
+      y1: y, y2: y, stroke: "var(--series-1)", "stroke-width": 2 }));
+    const dot = el("circle", { cx, cy: y, r: 6, fill: "var(--series-1)",
+      stroke: "var(--surface-1)", "stroke-width": 2 });
+    dot.addEventListener("mousemove", e => showTip(
+      `<b>${a.project}</b><br>能力 ${fmt(a.ability)}<br>SE ${fmt(a.se)}`, e));
+    dot.addEventListener("mouseleave", hideTip);
+    svg.appendChild(dot);
+    const label = el("text", { x: m.l - 8, y: y + 4, "text-anchor": "end",
+      fill: "var(--text-secondary)", "font-size": 12 }, a.project);
+    svg.appendChild(label);
+  });
+  return svg;
+}
+
+function problemsCard(diag) {
+  const card = el("div", { class: "card" });
+  card.appendChild(el("h2", {}, "识别性诊断"));
+  if (!diag.problems.length) {
+    card.appendChild(el("p", {}, [
+      badge("good", "通过"),
+      el("span", { class: "secondary",
+        style: "margin-left:8px" }, "未发现分离、缺等级或尺度反转问题"),
+    ]));
+  }
+  diag.problems.forEach(p => {
+    card.appendChild(el("div", { class: "problem-row" }, [
+      problemBadge(p.level),
+      el("div", {}, [
+        el("div", { style: "font-weight:600" }, p.kind),
+        el("div", { class: "secondary small" }, p.message),
+      ]),
+    ]));
+  });
+  card.appendChild(el("h3", {}, "项目重叠图连通分量"));
+  card.appendChild(el("p", { class: "small secondary" }, diag.separation_detail));
+  return card;
+}
+
+(async function init() {
+  let data;
+  try { data = await getJSON("/api/overview"); }
+  catch (e) {
+    root.appendChild(el("div", { class: "error-box" }, "加载失败: " + e.message));
+    return;
+  }
+  if (data.empty) { renderEmpty(root); return; }
+  document.getElementById("version-tag").textContent =
+    "版本 " + data.version_id.slice(0, 10);
+
+  const stats = el("div", { class: "grid cols-3" }, [
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, String(data.n_ratings)),
+      el("span", { class: "lbl" }, "有效评价")]),
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, String(data.projects.length)),
+      el("span", { class: "lbl" }, "项目")]),
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, String(data.raters.length)),
+      el("span", { class: "lbl" }, "评价者")]),
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, String(data.periods.length)),
+      el("span", { class: "lbl" }, "时期")]),
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, String(data.n_corrections)),
+      el("span", { class: "lbl" }, "追加更正")]),
+    el("div", { class: "card stat" }, [
+      el("span", { class: "num" }, fmt(data.fit_stats.mcfadden_pseudo_r2, 3)),
+      el("span", { class: "lbl" }, "McFadden 伪 R²")]),
+  ]);
+  root.appendChild(stats);
+
+  const grid = el("div", { class: "grid cols-2", style: "margin-top:16px" });
+  const abCard = el("div", { class: "card" }, [
+    el("h2", {}, "项目表现 (潜在能力, 零和锚)"),
+    abilityChart(data.abilities),
+    el("p", { class: "small muted" },
+      "点为后验估计, 横线为 ±1 标准误; 能力越高倾向获得越高等级。"),
+  ]);
+  grid.appendChild(abCard);
+  grid.appendChild(problemsCard(data.diagnostics));
+  root.appendChild(grid);
+
+  // 能力表格 (表格视图, 满足可访问性 relief 规则)
+  const tcard = el("div", { class: "card", style: "margin-top:16px" });
+  tcard.appendChild(el("h2", {}, "项目能力表"));
+  const tbl = el("table");
+  tbl.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "项目"), el("th", { class: "num" }, "能力"),
+    el("th", { class: "num" }, "标准误")])));
+  const tb = el("tbody");
+  [...data.abilities].sort((a, b) => b.ability - a.ability).forEach(a => {
+    tb.appendChild(el("tr", {}, [
+      el("td", {}, a.project),
+      el("td", { class: "num" }, fmt(a.ability)),
+      el("td", { class: "num" }, fmt(a.se))]));
+  });
+  tbl.appendChild(tb);
+  tcard.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(tcard);
+})();
+</script>
+</body>
+</html>

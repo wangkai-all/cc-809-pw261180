@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阈值与漂移 · 有序等级分析</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>有序等级分析</h1>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="project.html">项目概率</a>
+    <a href="thresholds.html">阈值与漂移</a>
+    <a href="data.html">数据与版本</a>
+    <a href="reports.html">报告复现</a>
+  </nav>
+  <span class="spacer"></span>
+</header>
+<main>
+  <div class="filters">
+    <label>评价者</label><select id="rater-sel"></select>
+  </div>
+  <div id="root"></div>
+</main>
+<script src="app.js"></script>
+<script>
+setActiveNav();
+const root = document.getElementById("root");
+let data = null;
+
+// 阈值位置 (tau_0) 随时期变化折线: fixed 水平 vs drift 游走
+function driftChart(rater) {
+  const periods = data.periods;
+  const fixedRows = data.fixed.threshold_table.filter(r => r.rater === rater);
+  const driftRows = data.drift.threshold_table.filter(r => r.rater === rater);
+  const W = 620, H = 320, m = { l: 52, r: 24, t: 24, b: 44 };
+  const fixedLoc = fixedRows.map(r => r.tau_0);
+  const driftLoc = driftRows.map(r => r.tau_0);
+  const allVals = [...fixedLoc, ...driftLoc];
+  const lo = Math.min(...allVals) - 0.3, hi = Math.max(...allVals) + 0.3;
+  const x = i => m.l + (periods.length === 1 ? (W - m.l - m.r) / 2
+    : i * (W - m.l - m.r) / (periods.length - 1));
+  const y = v => m.t + (hi - v) / (hi - lo) * (H - m.t - m.b);
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%",
+    role: "img", "aria-label": "阈值位置随时期漂移对比" });
+  for (let g = 0; g <= 4; g++) {
+    const gy = m.t + g * (H - m.t - m.b) / 4;
+    svg.appendChild(el("line", { x1: m.l, x2: W - m.r, y1: gy, y2: gy,
+      stroke: "var(--border)" }));
+    const val = hi - g * (hi - lo) / 4;
+    svg.appendChild(el("text", { x: m.l - 6, y: gy + 4, "text-anchor": "end",
+      "font-size": 11, fill: "var(--text-muted)" }, fmt(val, 2)));
+  }
+  periods.forEach((p, i) => svg.appendChild(el("text",
+    { x: x(i), y: H - m.b + 18, "text-anchor": "middle", "font-size": 11,
+      fill: "var(--text-secondary)" }, "时期 " + p)));
+
+  function line(vals, color, name) {
+    const pts = vals.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    svg.appendChild(el("polyline", { points: pts, fill: "none",
+      stroke: color, "stroke-width": 2 }));
+    vals.forEach((v, i) => {
+      const c = el("circle", { cx: x(i), cy: y(v), r: 5, fill: color,
+        stroke: "var(--surface-1)", "stroke-width": 2 });
+      c.addEventListener("mousemove", e => showTip(
+        `<b>${name}</b><br>时期 ${periods[i]}<br>阈值位置 ${fmt(v, 3)}`, e));
+      c.addEventListener("mouseleave", hideTip);
+      svg.appendChild(c);
+    });
+  }
+  line(fixedLoc, "var(--series-1)", "固定阈值");
+  line(driftLoc, "var(--series-2)", "缓变阈值");
+  return svg;
+}
+
+function render() {
+  root.innerHTML = "";
+  const rater = document.getElementById("rater-sel").value;
+  const K = data.categories.length;
+
+  const selCard = el("div", { class: "card" });
+  selCard.appendChild(el("h2", {}, "模型选择结论"));
+  const s = data.selection;
+  selCard.appendChild(el("p", {}, [
+    badge(s.selected === "drift" ? "warn" : "good",
+      "选择: " + (s.selected === "drift" ? "缓变阈值" : "固定阈值")),
+  ]));
+  selCard.appendChild(el("p", { class: "small secondary" },
+    `${s.criterion}; 固定 MLPD=${fmt(s.fixed_mlpd, 4)}, ` +
+    `缓变 MLPD=${fmt(s.drift_mlpd, 4)}。${s.rationale}`));
+  root.appendChild(selCard);
+
+  const chartCard = el("div", { class: "card", style: "margin-top:16px" });
+  chartCard.appendChild(el("h2", {}, `评价者 ${rater} 的阈值位置漂移`));
+  legend(chartCard, ["固定阈值 (tau_0)", "缓变阈值 (tau_0)"]);
+  chartCard.appendChild(driftChart(rater));
+  root.appendChild(chartCard);
+
+  // 完整阈值表 (固定 vs 漂移, 全部 K-1 条)
+  const tcard = el("div", { class: "card", style: "margin-top:16px" });
+  tcard.appendChild(el("h2", {}, `评价者 ${rater} 的全部阈值 (严格有序)`));
+  const tbl = el("table");
+  const head = el("tr", {}, [el("th", {}, "模型"), el("th", {}, "时期")]);
+  for (let k = 0; k < K - 1; k++)
+    head.appendChild(el("th", { class: "num" }, `tau_${k}`));
+  tbl.appendChild(el("thead", {}, head));
+  const tb = el("tbody");
+  const addRows = (name, table) => table.filter(r => r.rater === rater)
+    .forEach(r => {
+      const tr = el("tr", {}, [el("td", {}, name), el("td", {}, String(r.period))]);
+      for (let k = 0; k < K - 1; k++)
+        tr.appendChild(el("td", { class: "num" }, fmt(r[`tau_${k}`], 3)));
+      tb.appendChild(tr);
+    });
+  addRows("固定", data.fixed.threshold_table);
+  addRows("缓变", data.drift.threshold_table);
+  tbl.appendChild(tb);
+  tcard.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(tcard);
+
+  // 漂移显著性
+  const dcard = el("div", { class: "card", style: "margin-top:16px" });
+  dcard.appendChild(el("h2", {}, "相邻期阈值位置变化 (缓变模型)"));
+  const dsum = data.drift.drift_summary.filter(d => d.rater === rater);
+  if (!dsum.length) {
+    dcard.appendChild(el("p", { class: "muted" }, "仅有一个时期, 无漂移可评估。"));
+  } else {
+    const dt = el("table");
+    dt.appendChild(el("thead", {}, el("tr", {}, [
+      el("th", {}, "时期变化"), el("th", { class: "num" }, "Δ 位置"),
+      el("th", { class: "num" }, "SE"), el("th", { class: "num" }, "z"),
+      el("th", {}, "显著 (|z|≥2)")])));
+    const db = el("tbody");
+    dsum.forEach(d => db.appendChild(el("tr", {}, [
+      el("td", {}, `${d.from_period} → ${d.to_period}`),
+      el("td", { class: "num" }, fmt(d.delta_location)),
+      el("td", { class: "num" }, fmt(d.se_delta)),
+      el("td", { class: "num" }, d.z === null ? "—" : fmt(d.z, 2)),
+      el("td", {}, d.significant ? badge("warn", "显著漂移")
+                                 : badge("neutral", "不显著")),
+    ])));
+    dt.appendChild(db);
+    dcard.appendChild(el("div", { class: "table-wrap" }, dt));
+  }
+  root.appendChild(dcard);
+}
+
+(async function init() {
+  try { data = await getJSON("/api/thresholds"); }
+  catch (e) {
+    root.appendChild(el("div", { class: "error-box" }, "加载失败: " + e.message));
+    return;
+  }
+  const sel = document.getElementById("rater-sel");
+  data.raters.forEach(r => sel.appendChild(el("option", { value: r }, r)));
+  sel.addEventListener("change", render);
+  render();
+})();
+</script>
+</body>
+</html>

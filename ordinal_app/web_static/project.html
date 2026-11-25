@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目等级概率 · 有序等级分析</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>有序等级分析</h1>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="project.html">项目概率</a>
+    <a href="thresholds.html">阈值与漂移</a>
+    <a href="data.html">数据与版本</a>
+    <a href="reports.html">报告复现</a>
+  </nav>
+  <span class="spacer"></span>
+</header>
+<main>
+  <div class="filters">
+    <label>项目</label><select id="project-sel"></select>
+    <label>模型</label>
+    <select id="model-sel">
+      <option value="fixed">固定阈值</option>
+      <option value="drift">缓变阈值</option>
+    </select>
+    <label>锚定项目 (重表达, 不改变拟合)</label>
+    <select id="anchor-sel"></select>
+  </div>
+  <div id="root"></div>
+</main>
+<script src="app.js"></script>
+<script>
+setActiveNav();
+const root = document.getElementById("root");
+let overview = null, detail = null, anchorData = null;
+const shiftRef = { project: null, value: 0 };
+
+function renderProbabilities() {
+  root.innerHTML = "";
+  const model = document.getElementById("model-sel").value;
+  const anchor = document.getElementById("anchor-sel").value;
+  const cats = detail.categories;
+
+  // 锚定重表达: 能力与所有阈值同步平移, 使锚项目能力显示为 0
+  const anchorAbility = anchorData.abilities.find(a => a.project === anchor);
+  const shift = anchorAbility ? anchorAbility.ability : 0;
+
+  const head = el("div", { class: "grid cols-2" });
+  head.appendChild(el("div", { class: "card" }, [
+    el("h2", {}, `项目 ${detail.project} 的等级概率`),
+    el("p", { class: "secondary" }, [
+      "模型: ", el("b", {}, model === "fixed" ? "固定阈值" : "缓变阈值"),
+      ` · 锚定项目 ${anchor} (显示能力已平移 ${fmt(-shift, 3)})`,
+    ]),
+    el("p", { class: "small muted" },
+      "每条为该评价者在该时期对本项目给出各等级的预测概率; 等级按有序类别建模, 非等间距数字。"),
+  ]));
+  const abilityCard = el("div", { class: "card stat" }, [
+    el("span", { class: "num" }, fmt(detail.ability - shift)),
+    el("span", { class: "lbl" },
+      `重表达后能力 (原始 ${fmt(detail.ability)} ± ${fmt(detail.ability_se)})`),
+  ]);
+  head.appendChild(abilityCard);
+  root.appendChild(head);
+
+  const legendCard = el("div", { class: "card", style: "margin-top:16px" });
+  legendCard.appendChild(el("h2", {}, "等级概率 (按评价者 × 时期)"));
+  legend(legendCard, cats);
+
+  const rows = detail.probability_rows.filter(r => r.model === model);
+  const tbl = el("table");
+  tbl.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "评价者"), el("th", {}, "时期"),
+    el("th", {}, "概率分布"), ...cats.map(c => el("th", { class: "num" }, c)),
+  ])));
+  const tb = el("tbody");
+  rows.forEach(r => {
+    const tr = el("tr");
+    tr.appendChild(el("td", {}, r.rater));
+    tr.appendChild(el("td", {}, String(r.period)));
+    const cell = el("td");
+    cell.appendChild(probabilityBar(r.probs, cats));
+    tr.appendChild(cell);
+    r.probs.forEach(p => tr.appendChild(
+      el("td", { class: "num" }, fmt(p, 3))));
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  legendCard.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(legendCard);
+
+  // 实际观测 (原文本保留)
+  const obsCard = el("div", { class: "card", style: "margin-top:16px" });
+  obsCard.appendChild(el("h2", {}, "该项目的实际评价 (原始文本保留)"));
+  const ot = el("table");
+  ot.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "评价者"), el("th", {}, "时期"),
+    el("th", {}, "原始等级"), el("th", {}, "生效等级"),
+    el("th", {}, "状态"), el("th", {}, "更正原因")])));
+  const ob = el("tbody");
+  detail.observed.forEach(r => {
+    ob.appendChild(el("tr", {}, [
+      el("td", {}, r.rater),
+      el("td", {}, String(r.period)),
+      el("td", {}, r.raw_label),
+      el("td", {}, r.effective_label),
+      el("td", {}, r.corrected ? el("span", { class: "tag-corrected" }, "已更正")
+                               : badge("neutral", "原始")),
+      el("td", { class: "small secondary" }, r.correction_reason || "—"),
+    ]));
+  });
+  ot.appendChild(ob);
+  obsCard.appendChild(el("div", { class: "table-wrap" }, ot));
+  root.appendChild(obsCard);
+}
+
+async function loadProject(pid) {
+  detail = await getJSON("/api/project?id=" + encodeURIComponent(pid));
+  renderProbabilities();
+}
+
+(async function init() {
+  try {
+    [overview, anchorData] = await Promise.all([
+      getJSON("/api/overview"), getJSON("/api/anchor")]);
+  } catch (e) {
+    root.appendChild(el("div", { class: "error-box" }, "加载失败: " + e.message));
+    return;
+  }
+  if (overview.empty) { renderEmpty(root); return; }
+  const psel = document.getElementById("project-sel");
+  overview.projects.forEach(p => psel.appendChild(el("option", { value: p }, p)));
+  const asel = document.getElementById("anchor-sel");
+  // 零和锚对应一个虚拟 "零和 (默认)" 选项
+  overview.projects.forEach(p => asel.appendChild(el("option", { value: p }, p)));
+  asel.value = overview.projects[0];
+  psel.addEventListener("change", () => loadProject(psel.value));
+  document.getElementById("model-sel")
+    .addEventListener("change", renderProbabilities);
+  asel.addEventListener("change", renderProbabilities);
+  await loadProject(psel.value);
+})();
+</script>
+</body>
+</html>

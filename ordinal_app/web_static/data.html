@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据与版本 · 有序等级分析</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>有序等级分析</h1>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="project.html">项目概率</a>
+    <a href="thresholds.html">阈值与漂移</a>
+    <a href="data.html">数据与版本</a>
+    <a href="reports.html">报告复现</a>
+  </nav>
+  <span class="spacer"></span>
+  <span id="version-tag" class="badge neutral"></span>
+</header>
+<main>
+  <div class="filters">
+    <input id="filter" placeholder="按项目 / 评价者 / 等级文本筛选…" size="28">
+    <label><input type="checkbox" id="only-corrected"> 仅看已更正</label>
+  </div>
+  <div id="root"></div>
+</main>
+<script src="app.js"></script>
+<script>
+setActiveNav();
+const root = document.getElementById("root");
+
+function renderRecords(data) {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const onlyCor = document.getElementById("only-corrected").checked;
+  let rows = data.records;
+  if (onlyCor) rows = rows.filter(r => r.corrected);
+  if (q) rows = rows.filter(r =>
+    [r.project, r.rater, r.raw_label, r.effective_label]
+      .join(" ").toLowerCase().includes(q));
+
+  const card = el("div", { class: "card" });
+  card.appendChild(el("h2", {}, `评价明细 (${rows.length} / ${data.records.length})`));
+  const tbl = el("table");
+  tbl.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "事件 ID"), el("th", {}, "项目"), el("th", {}, "评价者"),
+    el("th", {}, "时期"), el("th", {}, "原始等级 (逐字保留)"),
+    el("th", {}, "生效等级"), el("th", {}, "状态"),
+    el("th", {}, "更正原因")])));
+  const tb = el("tbody");
+  rows.forEach(r => tb.appendChild(el("tr", {}, [
+    el("td", { class: "small muted" }, r.event_id),
+    el("td", {}, r.project), el("td", {}, r.rater),
+    el("td", {}, String(r.period)),
+    el("td", {}, r.raw_label),
+    el("td", {}, r.effective_label),
+    el("td", {}, r.corrected ? el("span", { class: "tag-corrected" }, "已更正")
+                             : badge("neutral", "原始")),
+    el("td", { class: "small secondary" }, r.correction_reason || "—"),
+  ])));
+  tbl.appendChild(tb);
+  card.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(card);
+}
+
+function renderVersions(data) {
+  const card = el("div", { class: "card", style: "margin-top:16px" });
+  card.appendChild(el("h2", {}, "版本链 (事件序列哈希, 只追加)"));
+  const tbl = el("table");
+  tbl.appendChild(el("thead", {}, el("tr", {}, [
+    el("th", {}, "版本哈希"), el("th", {}, "父版本"),
+    el("th", { class: "num" }, "事件数"),
+    el("th", { class: "num" }, "评价数"),
+    el("th", { class: "num" }, "更正数")])));
+  const tb = el("tbody");
+  data.versions.forEach(v => tb.appendChild(el("tr", {}, [
+    el("td", { class: "small" }, v.version_id),
+    el("td", { class: "small muted" }, v.parent_id ? v.parent_id.slice(0, 12) : "— (根)"),
+    el("td", { class: "num" }, String(v.n_events)),
+    el("td", { class: "num" }, String(v.n_ratings)),
+    el("td", { class: "num" }, String(v.n_corrections)),
+  ])));
+  tbl.appendChild(tb);
+  card.appendChild(el("div", { class: "table-wrap" }, tbl));
+  root.appendChild(card);
+}
+
+(async function init() {
+  let data;
+  try { data = await getJSON("/api/data"); }
+  catch (e) {
+    root.appendChild(el("div", { class: "error-box" }, "加载失败: " + e.message));
+    return;
+  }
+  document.getElementById("version-tag").textContent =
+    "版本 " + (data.version_id || "").slice(0, 10);
+  const redraw = () => { root.innerHTML = ""; renderRecords(data);
+                         renderVersions(data); };
+  document.getElementById("filter").addEventListener("input", redraw);
+  document.getElementById("only-corrected").addEventListener("change", redraw);
+  redraw();
+})();
+</script>
+</body>
+</html>

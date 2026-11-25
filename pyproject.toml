@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=66"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ordinal-rating-app"
+version = "1.0.0"
+description = "有序等级 (服务评价) 数据分析: 累积链接模型联合估计项目表现与评价者阈值"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.scripts]
+ordinal-app = "ordinal_app.cli:main"
+
+[tool.setuptools]
+packages = ["ordinal_app"]
+
+[tool.setuptools.package-data]
+ordinal_app = ["web_static/*.html", "web_static/*.css", "web_static/*.js"]
